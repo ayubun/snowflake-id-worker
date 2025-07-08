@@ -10,5 +10,5 @@ async fn main() {
         .parse::<u16>()
         .expect("PORT must be a valid u16");
     let routes = create_routes();
-    warp::serve(routes).run(([127, 0, 0, 1], port)).await;
+    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
 }
