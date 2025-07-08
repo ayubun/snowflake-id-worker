@@ -1,0 +1,12 @@
+name: build
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: make sure the code can compile :o
+        run: cargo build --release --locked
