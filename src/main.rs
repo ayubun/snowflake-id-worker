@@ -27,8 +27,7 @@ async fn main() {
         Arc::new(Mutex::new(snowflake_id_generator_from_env()));
 
     // Optional health check endpoint
-    let health_api = warp::path!(
-        "health").and(warp::get()).map(|| "OK");
+    let health_api = warp::path!("health").and(warp::get()).map(|| "OK");
 
     // `POST /generate` endpoint ヽ(*・ω・)ﾉ
     let generate_api = warp::path!("generate")
@@ -78,11 +77,11 @@ fn snowflake_id_generator_from_env() -> SnowflakeIdGenerator {
         .expect("WORKER_ID must be a valid u8");
 
     if data_center_id > MAX_DATA_CENTER_ID {
-        panic!("DATA_CENTER_ID must be less than {}", MAX_DATA_CENTER_ID);
+        panic!("DATA_CENTER_ID must be less than {MAX_DATA_CENTER_ID}");
     }
 
     if worker_id > MAX_WORKER_ID {
-        panic!("WORKER_ID must be less than {}", MAX_WORKER_ID);
+        panic!("WORKER_ID must be less than {MAX_WORKER_ID}");
     }
 
     SnowflakeIdGenerator::with_epoch(data_center_id as i32, worker_id as i32, epoch)
