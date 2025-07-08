@@ -18,7 +18,8 @@ The worker supports the following environment variables:
 | `DATA_CENTER_ID` | `0` | `u8` | An identifier for the location that a given set of workers are running on |
 | `EPOCH` | UNIX Epoch | `u64` | An optional environment variable that allows hosts to use a custom epoch. For example, Discord uses a custom epoch of `1420070400000` |
 
-> [!IMPORTANT] To ensure the uniqueness of Snowflake IDs generated across a distributed system, all workers must have a unique combination
+> [!IMPORTANT] 
+> To ensure the uniqueness of Snowflake IDs generated across a distributed system, all workers must have a unique combination
 > of `WORKER_ID` and `DATA_CENTER_ID`
 
 # API Spec
