@@ -9,7 +9,7 @@ interacted with just like any other image. To run a single snowflake ID worker, 
 
 ### via `docker`:
 ```bash
-docker run -p 80:80 ghcr.io/ayubun/snowflake-id-worker
+docker run -p 80:80 ghcr.io/ayubun/snowflake-id-worker:0
 ```
 ### via `docker compose up` / `compose.yaml`:
 ```yml
@@ -17,13 +17,21 @@ version: '3.8'
 
 services:
   snowflake-id-worker:
-    image: ghcr.io/ayubun/snowflake-id-worker
+    image: ghcr.io/ayubun/snowflake-id-worker:0
     ports:
       - 80:80
 ```
 
 > [!NOTE] 
 > The HTTP API is registered on port 80 within the image
+
+> [!IMPORTANT]
+> The above commands will pull the `snowflake-id-worker:0` image, which auto-updates upon bugfix and minor version changes. 
+> If you want to use a more static image version, you can supply one instead. Examples:
+> - `ghcr.io/ayubun/snowflake-id-worker:0.1`
+> - `ghcr.io/ayubun/snowflake-id-worker:0.1.0`
+>
+> Alternatively, you can live on the edge and use the `latest` tag >:D (not supplying a tag will default to `latest`)
 
 ## Basic Multi-Worker Example
 
@@ -34,7 +42,7 @@ version: '3.8'
 
 services:
   snowflake-id-worker-0:
-    image: ghcr.io/ayubun/snowflake-id-worker
+    image: ghcr.io/ayubun/snowflake-id-worker:0
     restart: always
     ports:
       - 80:80
@@ -42,7 +50,7 @@ services:
       - WORKER_ID=0
       - EPOCH=1420070400000
   snowflake-id-worker-1:
-    image: ghcr.io/ayubun/snowflake-id-worker
+    image: ghcr.io/ayubun/snowflake-id-worker:0
     restart: always
     ports:
       # If you are hosting multiple workers on a single machine, you 
