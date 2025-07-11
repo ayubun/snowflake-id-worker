@@ -1,6 +1,6 @@
+use clap::Parser;
 use snowflake::SnowflakeIdGenerator;
 use std::{
-    env,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -10,12 +10,23 @@ const MAX_DATA_CENTER_ID: u8 = (1 << 5) - 1;
 const MAX_WORKER_ID: u8 = (1 << 5) - 1;
 
 const DEFAULT_EPOCH: SystemTime = UNIX_EPOCH;
-const DEFAULT_DATA_CENTER_ID: u8 = 0;
-const DEFAULT_WORKER_ID: u8 = 0;
 
 #[derive(serde::Deserialize)]
 struct GenerateRequest {
     count: Option<i64>,
+}
+
+#[derive(Debug, clap::Parser)]
+struct Args {
+    // TO SET WORKER ID AUTOMATICALLY IN A K8S STATEFUL SET, SET TO "FROM_HOSTNAME"
+    #[arg(long, default_value = "0")]
+    worker_id: String,
+
+    #[arg(long, default_value = "0")]
+    data_center_id: u8,
+
+    #[arg(long)]
+    epoch: Option<u64>,
 }
 
 pub fn create_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
@@ -81,21 +92,39 @@ pub fn create_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::
 }
 
 fn snowflake_id_generator_from_env() -> SnowflakeIdGenerator {
-    let epoch: SystemTime = env::var("EPOCH")
-        .map(|s| {
-            UNIX_EPOCH + Duration::from_millis(s.parse::<u64>().expect("EPOCH must be a valid u64"))
-        })
-        .unwrap_or(DEFAULT_EPOCH);
-    let data_center_id = env::var("DATA_CENTER_ID")
-        .unwrap_or_else(|_| DEFAULT_DATA_CENTER_ID.to_string())
-        .parse::<u8>()
-        .expect("DATA_CENTER_ID must be a valid u8");
-    let worker_id = env::var("WORKER_ID")
-        .unwrap_or_else(|_| DEFAULT_WORKER_ID.to_string())
-        .parse::<u8>()
-        .expect("WORKER_ID must be a valid u8");
+    let args = Args::parse();
 
-    if data_center_id > MAX_DATA_CENTER_ID {
+    let epoch: SystemTime = args
+        .epoch
+        .map(|e| UNIX_EPOCH + Duration::from_millis(e))
+        .unwrap_or(DEFAULT_EPOCH);
+
+    let worker_id = if args.worker_id.eq_ignore_ascii_case("FROM_HOSTNAME")
+    {
+        // NOTE(ayubun): assuming this is being run from a stateful set in k8s:
+        //
+        // snowflake-id-worker-0
+        // snowflake-id-worker-1
+        // ...
+        // snowflake-id-worker-n
+        //
+        // this code will try to grab the pod's index (n) and use it as the worker id
+        hostname::get()
+            .map(|os| os.to_string_lossy().into_owned())
+            .expect("cannot retrieve hostname (WORKER_ID is being parsed from hostname)")
+            .rsplit_once('-')
+            .expect("cannot split WORKER_ID from hostname (WORKER_ID is being parsed from hostname)")
+            .1
+            .parse::<u8>()
+            .expect("cannot parse WORKER_ID from hostname (WORKER_ID is being parsed from hostname)")
+    } else {
+        args.worker_id.parse::<u8>().expect(&format!(
+            "cannot parse WORKER_ID as a valid u8 (WORKER_ID: \"{}\")",
+            args.worker_id
+        ))
+    };
+
+    if args.data_center_id > MAX_DATA_CENTER_ID {
         panic!("DATA_CENTER_ID must be less than {MAX_DATA_CENTER_ID}");
     }
 
@@ -103,7 +132,9 @@ fn snowflake_id_generator_from_env() -> SnowflakeIdGenerator {
         panic!("WORKER_ID must be less than {MAX_WORKER_ID}");
     }
 
-    SnowflakeIdGenerator::with_epoch(data_center_id as i32, worker_id as i32, epoch)
+    println!("starting snowflake-id-worker with WORKER_ID: {worker_id}, DATA_CENTER_ID: {}, and EPOCH: {epoch:?}", args.data_center_id);
+
+    SnowflakeIdGenerator::with_epoch(args.data_center_id as i32, worker_id as i32, epoch)
 }
 
 #[cfg(test)]
@@ -116,15 +147,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_endpoint() {
-        println!("Testing health endpoint...");
         let routes = create_routes();
 
         let resp = request().method("GET").path("/health").reply(&routes).await;
 
         assert_eq!(resp.status(), 200);
         assert_eq!(resp.body(), "OK");
-
-        println!("✓ Health endpoint test passed");
     }
 
     #[tokio::test]

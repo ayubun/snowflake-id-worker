@@ -1,14 +1,15 @@
+use clap::Parser;
 use snowflake_id_worker::create_routes;
+
+#[derive(Debug, clap::Parser)]
+struct Args {
+    #[arg(long, default_value = "80")]
+    port: u16,
+}
 
 #[tokio::main]
 async fn main() {
-    // NOTE(ayubun): The `PORT` env is not documented because the Dockerfile only exposes
-    // port 80. Changing the port via env is mostly valuable for local development, where
-    // port 80 might be taken by something else~
-    let port = std::env::var("PORT")
-        .unwrap_or("80".to_string())
-        .parse::<u16>()
-        .expect("PORT must be a valid u16");
+    let args = Args::parse();
     let routes = create_routes();
-    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+    warp::serve(routes).run(([0, 0, 0, 0], args.port)).await;
 }

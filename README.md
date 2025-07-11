@@ -14,7 +14,7 @@ The worker supports the following environment variables:
 
 | Environment Variable | Default Value | Supported Type | Description |
 |--|--|--|--|
-| `WORKER_ID` | `0` | `u8` | An identifier for the given worker |
+| `WORKER_ID` | `0` | `u8` or "`FROM_HOSTNAME`" | An identifier for the given worker. Setting this value to "`FROM_HOSTNAME`" will try to parse the worker ID from the end of the hostname. This feature is for workers being run in k8s StatefulSets |
 | `DATA_CENTER_ID` | `0` | `u8` | An identifier for the location that a given set of workers are running on |
 | `EPOCH` | UNIX Epoch | `u64` | An optional environment variable that allows hosts to use a custom epoch. For example, Discord uses a custom epoch of `1420070400000` |
 
