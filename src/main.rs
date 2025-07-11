@@ -1,15 +1,6 @@
-use clap::Parser;
-use snowflake_id_worker::create_routes;
-
-#[derive(Debug, clap::Parser)]
-struct Args {
-    #[arg(long, default_value = "80", env = "PORT")]
-    port: u16,
-}
+use snowflake_id_worker::run_worker;
 
 #[tokio::main]
 async fn main() {
-    let args = Args::parse();
-    let routes = create_routes();
-    warp::serve(routes).run(([0, 0, 0, 0], args.port)).await;
+    run_worker().await;
 }

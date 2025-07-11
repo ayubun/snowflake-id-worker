@@ -19,6 +19,9 @@ struct GenerateRequest {
 
 #[derive(Debug, clap::Parser)]
 struct Args {
+    #[arg(long, default_value = "80", env = "PORT")]
+    port: u16,
+
     // TO SET WORKER ID AUTOMATICALLY IN A K8S STATEFUL SET, SET TO "FROM_HOSTNAME"
     #[arg(long, default_value = "0", env = "WORKER_ID")]
     worker_id: String,
@@ -28,6 +31,13 @@ struct Args {
 
     #[arg(long, env = "EPOCH")]
     epoch: Option<u64>,
+}
+
+pub async fn run_worker() {
+    let args = Args::parse();
+    warp::serve(create_routes())
+        .run(([0, 0, 0, 0], args.port))
+        .await;
 }
 
 pub fn create_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
