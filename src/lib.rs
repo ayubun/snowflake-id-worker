@@ -93,7 +93,14 @@ pub fn create_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::
 }
 
 fn snowflake_id_generator_from_env() -> SnowflakeIdGenerator {
-    let args = Args::parse();
+    let args = if cfg!(test) {
+        // NOTE(ayubun): during tests, we should only parse from environment variables.
+        // CLI args will conflict with the necessary `--test-threads=1` flag, which
+        // is needed to run tests in series so that the environment variables don't conflict
+        Args::try_parse_from([""]).unwrap_or_else(|_| Args::parse())
+    } else {
+        Args::parse()
+    };
 
     // NOTE(ayubun): for testing, i'm allowing hostname to be set via an environment variable.
     // this is so we can ensure the hostname parsing works as expected~
@@ -290,6 +297,37 @@ mod tests {
     fn test_env_parsing_invalid_worker_id() {
         env::set_var("WORKER_ID", "invalid");
         env::set_var("DATA_CENTER_ID", "0");
+        env::remove_var("EPOCH");
+
+        snowflake_id_generator_from_env();
+    }
+
+    #[test]
+    #[should_panic(expected = "DATA_CENTER_ID must be less than")]
+    fn test_env_parsing_data_center_id_too_large() {
+        env::set_var("WORKER_ID", "0");
+        env::set_var("DATA_CENTER_ID", "32");
+        env::remove_var("EPOCH");
+
+        snowflake_id_generator_from_env();
+    }
+
+    #[test]
+    #[should_panic(expected = "WORKER_ID must be less than")]
+    fn test_env_parsing_worker_id_too_large() {
+        env::set_var("WORKER_ID", "32");
+        env::set_var("DATA_CENTER_ID", "0");
+        env::remove_var("EPOCH");
+
+        snowflake_id_generator_from_env();
+    }
+
+    #[test]
+    #[should_panic(expected = "WORKER_ID must be less than")]
+    fn test_env_parsing_hostname_worker_id_too_large() {
+        env::set_var("WORKER_ID", "FROM_HOSTNAME");
+        env::set_var("DATA_CENTER_ID", "0");
+        env::set_var("HOSTNAME_FOR_TESTING", "hostname-32");
         env::remove_var("EPOCH");
 
         snowflake_id_generator_from_env();
