@@ -3,7 +3,7 @@ use snowflake_id_worker::create_routes;
 
 #[derive(Debug, clap::Parser)]
 struct Args {
-    #[arg(long, default_value = "80")]
+    #[arg(long, default_value = "80", env = "PORT")]
     port: u16,
 }
 

@@ -64,13 +64,12 @@ fn bench_concurrent_single_generates(c: &mut Criterion) {
                             let payload_clone = payload.clone();
 
                             let handle = tokio::spawn(async move {
-                                let resp = request()
+                                request()
                                     .method("POST")
                                     .path("/generate")
                                     .json(&payload_clone)
                                     .reply(&routes_clone)
-                                    .await;
-                                resp
+                                    .await
                             });
                             handles.push(handle);
                         }
@@ -107,13 +106,12 @@ fn bench_concurrent_batch_generates(c: &mut Criterion) {
                             let routes_clone = routes.clone();
                             let payload_clone = payload.clone();
                             let handle = tokio::spawn(async move {
-                                let resp = request()
+                                request()
                                     .method("POST")
                                     .path("/generate")
                                     .json(&payload_clone)
                                     .reply(&routes_clone)
-                                    .await;
-                                resp
+                                    .await
                             });
                             handles.push(handle);
                         }

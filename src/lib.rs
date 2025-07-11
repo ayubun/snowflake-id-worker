@@ -1,6 +1,7 @@
 use clap::Parser;
 use snowflake::SnowflakeIdGenerator;
 use std::{
+    env,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -19,13 +20,13 @@ struct GenerateRequest {
 #[derive(Debug, clap::Parser)]
 struct Args {
     // TO SET WORKER ID AUTOMATICALLY IN A K8S STATEFUL SET, SET TO "FROM_HOSTNAME"
-    #[arg(long, default_value = "0")]
+    #[arg(long, default_value = "0", env = "WORKER_ID")]
     worker_id: String,
 
-    #[arg(long, default_value = "0")]
+    #[arg(long, default_value = "0", env = "DATA_CENTER_ID")]
     data_center_id: u8,
 
-    #[arg(long)]
+    #[arg(long, env = "EPOCH")]
     epoch: Option<u64>,
 }
 
@@ -94,6 +95,14 @@ pub fn create_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::
 fn snowflake_id_generator_from_env() -> SnowflakeIdGenerator {
     let args = Args::parse();
 
+    // NOTE(ayubun): for testing, i'm allowing hostname to be set via an environment variable.
+    // this is so we can ensure the hostname parsing works as expected~
+    let hostname = env::var("HOSTNAME_FOR_TESTING").unwrap_or_else(|_| {
+        hostname::get()
+            .map(|os| os.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "localhost".to_string())
+    });
+
     let epoch: SystemTime = args
         .epoch
         .map(|e| UNIX_EPOCH + Duration::from_millis(e))
@@ -108,9 +117,7 @@ fn snowflake_id_generator_from_env() -> SnowflakeIdGenerator {
         // snowflake-id-worker-n
         //
         // this code will try to grab the pod's index (n) and use it as the worker id
-        hostname::get()
-            .map(|os| os.to_string_lossy().into_owned())
-            .expect("cannot retrieve hostname (WORKER_ID is being parsed from hostname)")
+        hostname
             .rsplit_once('-')
             .expect(
                 "cannot split WORKER_ID from hostname (WORKER_ID is being parsed from hostname)",
@@ -147,11 +154,154 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::collections::HashSet;
+    use std::env;
 
     use warp::test::request;
 
+    #[test]
+    fn test_env_parsing_default_values() {
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+        env::remove_var("EPOCH");
+
+        let mut generator = snowflake_id_generator_from_env();
+        let id = generator.real_time_generate();
+        assert!(id > 0);
+    }
+
+    #[test]
+    fn test_env_parsing_worker_id() {
+        env::set_var("WORKER_ID", "15");
+        env::set_var("DATA_CENTER_ID", "0");
+        env::remove_var("EPOCH");
+
+        let mut generator = snowflake_id_generator_from_env();
+        let id = generator.real_time_generate();
+        assert!(id > 0);
+
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+    }
+
+    #[test]
+    fn test_env_parsing_data_center_id() {
+        env::set_var("WORKER_ID", "0");
+        env::set_var("DATA_CENTER_ID", "10");
+        env::remove_var("EPOCH");
+
+        let mut generator = snowflake_id_generator_from_env();
+        let id = generator.real_time_generate();
+        assert!(id > 0);
+
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+    }
+
+    #[test]
+    fn test_env_parsing_epoch() {
+        env::set_var("WORKER_ID", "5");
+        env::set_var("DATA_CENTER_ID", "3");
+        env::set_var("EPOCH", "1420070400000"); // Discord's Epoch (2015-01-01 00:00:00 UTC)
+
+        let mut generator = snowflake_id_generator_from_env();
+        let id = generator.real_time_generate();
+        assert!(id > 0);
+
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+        env::remove_var("EPOCH");
+    }
+
+    #[test]
+    fn test_env_parsing_max_values() {
+        env::set_var("WORKER_ID", MAX_WORKER_ID.to_string());
+        env::set_var("DATA_CENTER_ID", MAX_DATA_CENTER_ID.to_string());
+        env::remove_var("EPOCH");
+
+        let mut generator = snowflake_id_generator_from_env();
+        let id = generator.real_time_generate();
+        assert!(id > 0);
+
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+    }
+
+    #[test]
+    fn test_env_parsing_hostnames() {
+        let valid_hostnames = vec![
+            "app-15",
+            "service-worker-10",
+            "my-pod-name-7",
+            "test-0",
+            "meow-meow-31",
+        ];
+
+        for hostname in valid_hostnames {
+            env::set_var("WORKER_ID", "FROM_HOSTNAME");
+            env::set_var("DATA_CENTER_ID", "0");
+            env::set_var("HOSTNAME_FOR_TESTING", hostname);
+            env::remove_var("EPOCH");
+
+            let mut generator = snowflake_id_generator_from_env();
+            let id = generator.real_time_generate();
+            assert!(id > 0, "Failed for hostname: {hostname}");
+
+            env::remove_var("WORKER_ID");
+            env::remove_var("DATA_CENTER_ID");
+            env::remove_var("HOSTNAME_FOR_TESTING");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot split WORKER_ID from hostname")]
+    fn test_env_parsing_hostname_no_dash() {
+        env::set_var("WORKER_ID", "FROM_HOSTNAME");
+        env::set_var("DATA_CENTER_ID", "0");
+        env::set_var("HOSTNAME_FOR_TESTING", "nodasheshere");
+        env::remove_var("EPOCH");
+
+        snowflake_id_generator_from_env();
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot parse WORKER_ID from hostname")]
+    fn test_env_parsing_hostname_invalid_suffix() {
+        env::set_var("WORKER_ID", "FROM_HOSTNAME");
+        env::set_var("DATA_CENTER_ID", "0");
+        env::set_var("HOSTNAME_FOR_TESTING", "hostname-invalid");
+        env::remove_var("EPOCH");
+
+        snowflake_id_generator_from_env();
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot parse WORKER_ID from hostname")]
+    fn test_env_parsing_hostname_empty_suffix() {
+        env::set_var("WORKER_ID", "FROM_HOSTNAME");
+        env::set_var("DATA_CENTER_ID", "0");
+        env::set_var("HOSTNAME_FOR_TESTING", "hostname-");
+        env::remove_var("EPOCH");
+
+        snowflake_id_generator_from_env();
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot parse WORKER_ID as a valid u8")]
+    fn test_env_parsing_invalid_worker_id() {
+        env::set_var("WORKER_ID", "invalid");
+        env::set_var("DATA_CENTER_ID", "0");
+        env::remove_var("EPOCH");
+
+        snowflake_id_generator_from_env();
+    }
+
     #[tokio::test]
     async fn test_health_endpoint() {
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+        env::remove_var("EPOCH");
+        env::remove_var("HOSTNAME_FOR_TESTING");
+
         let routes = create_routes();
 
         let resp = request().method("GET").path("/health").reply(&routes).await;
@@ -162,6 +312,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_endpoint_no_payload() {
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+        env::remove_var("EPOCH");
+        env::remove_var("HOSTNAME_FOR_TESTING");
+
         let routes = create_routes();
 
         let resp = request()
@@ -182,6 +337,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_endpoint_with_count() {
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+        env::remove_var("EPOCH");
+        env::remove_var("HOSTNAME_FOR_TESTING");
+
         let routes = create_routes();
 
         let payload = json!({"count": 10});
@@ -206,6 +366,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_endpoint_with_large_count() {
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+        env::remove_var("EPOCH");
+        env::remove_var("HOSTNAME_FOR_TESTING");
+
         let routes = create_routes();
 
         let payload = json!({"count": 100000});
@@ -229,6 +394,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_http_requests() {
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+        env::remove_var("EPOCH");
+        env::remove_var("HOSTNAME_FOR_TESTING");
+
         let routes = create_routes();
 
         let num_requests = 50;
@@ -273,9 +443,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_request_methods() {
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+        env::remove_var("EPOCH");
+        env::remove_var("HOSTNAME_FOR_TESTING");
+
         let routes = create_routes();
 
-        // /generate expects POST
         let resp = request()
             .method("GET")
             .path("/generate")
@@ -296,6 +470,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_non_existent_endpoints() {
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+        env::remove_var("EPOCH");
+        env::remove_var("HOSTNAME_FOR_TESTING");
+
         let routes = create_routes();
 
         let resp = request()
@@ -309,9 +488,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_payload_edge_cases() {
-        let routes = create_routes();
+        env::remove_var("WORKER_ID");
+        env::remove_var("DATA_CENTER_ID");
+        env::remove_var("EPOCH");
+        env::remove_var("HOSTNAME_FOR_TESTING");
 
-        // validate that bad payloads return 400 Bad Request
+        let routes = create_routes();
 
         let payload = json!({"count": 0});
         let resp = request()
