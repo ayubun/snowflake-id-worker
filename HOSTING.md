@@ -28,8 +28,8 @@ services:
 > [!IMPORTANT]
 > The above commands will pull the `snowflake-id-worker:0` image, which auto-updates upon bugfix and minor version changes. 
 > If you want to use a more static image version, you can supply one instead. Examples:
-> - `ghcr.io/ayubun/snowflake-id-worker:0.1`
-> - `ghcr.io/ayubun/snowflake-id-worker:0.1.0`
+> - `ghcr.io/ayubun/snowflake-id-worker:0.2`
+> - `ghcr.io/ayubun/snowflake-id-worker:0.2.0`
 >
 > Alternatively, you can live on the edge and use the `latest` tag >:D (not supplying a tag will default to `latest`)
 
