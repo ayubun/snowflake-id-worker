@@ -17,6 +17,7 @@ The worker supports the following environment variables:
 | `WORKER_ID` | `0` | `u8` or "`FROM_HOSTNAME`" | An identifier for the given worker. Setting this value to "`FROM_HOSTNAME`" will try to parse the worker ID from the end of the hostname. This feature is for workers being run in k8s StatefulSets |
 | `DATA_CENTER_ID` | `0` | `u8` | An identifier for the location that a given set of workers are running on |
 | `EPOCH` | UNIX Epoch | `u64` | An optional environment variable that allows hosts to use a custom epoch. For example, Discord uses a custom epoch of `1420070400000` |
+| `PORT` | `80` | `u16` | The port that the HTTP API listens to requests from. Unless you are running this locally or modifying the Dockerfile, **do not modify this**. The base image only exposes port 80. |
 
 > [!IMPORTANT] 
 > To ensure the uniqueness of Snowflake IDs generated across a distributed system, all workers must have a unique combination

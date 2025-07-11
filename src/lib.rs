@@ -99,8 +99,7 @@ fn snowflake_id_generator_from_env() -> SnowflakeIdGenerator {
         .map(|e| UNIX_EPOCH + Duration::from_millis(e))
         .unwrap_or(DEFAULT_EPOCH);
 
-    let worker_id = if args.worker_id.eq_ignore_ascii_case("FROM_HOSTNAME")
-    {
+    let worker_id = if args.worker_id.eq_ignore_ascii_case("FROM_HOSTNAME") {
         // NOTE(ayubun): assuming this is being run from a stateful set in k8s:
         //
         // snowflake-id-worker-0
@@ -113,15 +112,21 @@ fn snowflake_id_generator_from_env() -> SnowflakeIdGenerator {
             .map(|os| os.to_string_lossy().into_owned())
             .expect("cannot retrieve hostname (WORKER_ID is being parsed from hostname)")
             .rsplit_once('-')
-            .expect("cannot split WORKER_ID from hostname (WORKER_ID is being parsed from hostname)")
+            .expect(
+                "cannot split WORKER_ID from hostname (WORKER_ID is being parsed from hostname)",
+            )
             .1
             .parse::<u8>()
-            .expect("cannot parse WORKER_ID from hostname (WORKER_ID is being parsed from hostname)")
+            .expect(
+                "cannot parse WORKER_ID from hostname (WORKER_ID is being parsed from hostname)",
+            )
     } else {
-        args.worker_id.parse::<u8>().expect(&format!(
-            "cannot parse WORKER_ID as a valid u8 (WORKER_ID: \"{}\")",
-            args.worker_id
-        ))
+        args.worker_id.parse::<u8>().unwrap_or_else(|_| {
+            panic!(
+                "cannot parse WORKER_ID as a valid u8 (WORKER_ID: \"{}\")",
+                args.worker_id
+            )
+        })
     };
 
     if args.data_center_id > MAX_DATA_CENTER_ID {
