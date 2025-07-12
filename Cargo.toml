@@ -35,3 +35,8 @@ tokio-test = "0.4"
 [[bench]]
 name = "bench"
 harness = false
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
