@@ -16,7 +16,7 @@ fn main() {
     stream.write_all(data.as_bytes()).expect("write data");
 
     let mut buffer = [0; 12];
-    stream.read(&mut buffer).expect("read data");
+    stream.read_exact(&mut buffer).expect("read data");
 
     assert!(buffer == "HTTP/1.1 200".as_bytes(), "response is not ok");
 }
