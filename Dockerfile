@@ -1,21 +1,41 @@
-FROM rust:1.88 AS builder
+FROM rust:1.88-alpine AS build
 
-WORKDIR /usr/snowflake-id-worker
-COPY src/ src/
-COPY benches/ benches/
-COPY Cargo.toml Cargo.lock ./
+ARG PROFILE=release
 
-RUN cargo build --release
+WORKDIR /build
 
+RUN mkdir bin && \
+    apk add --no-cache musl-dev
 
-FROM debian:trixie-slim
+# Mount Cargo's work directories as cache to allow faster
+# And incremental rebuilds during the development process
+RUN --mount=type=cache,target=target \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=bind,source=src,target=src \
+    --mount=type=bind,source=benches,target=benches \
+    --mount=type=bind,source=Cargo.toml,target=Cargo.toml,readwrite \
+    --mount=type=bind,source=Cargo.lock,target=Cargo.lock,readwrite \
+    cargo build --profile $PROFILE && \
+    # The "dev" target directory is named "debug" instead
+    [ $PROFILE = "dev" ] && FOLDER="debug" || FOLDER="release"; \
+    # Move output into an unmounted directory for copying
+    mv target/$FOLDER/healthcheck /build/bin && \
+    mv target/$FOLDER/snowflake-id-worker /build/bin
 
-WORKDIR /usr/local/bin
-# NOTE(ayubun): ngl idk why this is valuable but it's documented on rust's docker images https://hub.docker.com/_/rust
-# could prolly do without it but im lazy =w= submit a PR if u know what ur doing !!
-RUN apt-get update && rm -rf /var/lib/apt/lists/*
-#
-COPY --from=builder /usr/snowflake-id-worker/target/release/snowflake-id-worker /usr/local/bin/snowflake-id-worker
+FROM scratch AS image
+
+ARG PROFILE
 
 EXPOSE 80
+
+ENV PATH=/usr/local/bin
+# Non-empty value to enable
+ENV RUST_BACKTRACE=$PROFILE
+
+COPY --from=build /build/bin /usr/local/bin
+
+HEALTHCHECK --interval=5s --start-interval=1s --retries=1 --timeout=5s --start-period=1m CMD ["healthcheck"]
+
+USER 1000:1000
 CMD ["snowflake-id-worker"]
