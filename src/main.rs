@@ -1,5 +1,4 @@
-use snowflake_id_worker::run_worker;
-use tokio::signal;
+use snowflake_id_worker::{exit_signal, run_worker};
 
 #[tokio::main]
 async fn main() {
@@ -7,12 +6,9 @@ async fn main() {
         run_worker().await;
     });
 
-    match signal::ctrl_c().await {
-        Ok(()) => {},
-        Err(err) => {
-            eprintln!("Unable to listen for shutdown signal: {}", err);
-            // we also shut down in case of error
-        },
+    match exit_signal().await {
+        () => {},
+        
     }
     handle.abort();
 }
