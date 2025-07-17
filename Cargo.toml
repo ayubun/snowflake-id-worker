@@ -9,6 +9,7 @@ repository = "https://github.com/ayubun/snowflake-id-worker"
 homepage = "https://github.com/ayubun/snowflake-id-worker"
 documentation = "https://github.com/ayubun/snowflake-id-worker"
 description = "A Rust worker that serves an HTTP API to generate snowflake IDs using the Twitter snowflake algorithm"
+default-run = "snowflake-id-worker"
 
 [lib]
 name = "snowflake_id_worker"
