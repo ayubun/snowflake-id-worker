@@ -19,7 +19,7 @@ struct GenerateRequest {
 
 #[derive(Debug, clap::Parser)]
 struct Args {
-    #[arg(long, default_value = "80", env = "PORT")]
+    #[arg(long, default_value = "8080", env = "PORT")]
     port: u16,
 
     // TO SET WORKER ID AUTOMATICALLY IN A K8S STATEFUL SET, SET TO "FROM_HOSTNAME"

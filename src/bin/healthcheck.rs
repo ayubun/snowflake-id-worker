@@ -5,8 +5,8 @@ use std::{
 };
 
 fn main() {
-    let port = env::var("HOST")
-        .unwrap_or("80".to_string())
+    let port = env::var("PORT")
+        .unwrap_or("8080".to_string())
         .parse::<u16>()
         .expect("valid port (u16)");
 

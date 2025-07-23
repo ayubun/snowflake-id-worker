@@ -27,7 +27,7 @@ FROM scratch AS image
 
 ARG PROFILE
 
-EXPOSE 80
+EXPOSE 8080
 
 ENV PATH=/usr/local/bin
 # Non-empty value to enable
