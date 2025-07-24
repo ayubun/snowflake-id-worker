@@ -45,7 +45,7 @@ pub async fn run_worker() {
 /// Useful to know when the process should begin its cleanup and graceful shutdown.
 #[cfg(windows)]
 pub async fn exit_signal() {
-    tokio::signal::ctrl_c().await;
+    let _ = tokio::signal::ctrl_c().await.unwrap();
 }
 
 /// Returns a future which will resolve when SIGINT/SIGTERM are sent to the process.
@@ -83,7 +83,7 @@ pub fn create_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::
         .and(warp::body::bytes())
         .map(move |body: warp::hyper::body::Bytes| {
             // NOTE(ayubun): We parse JSON manually to handle malformed JSON as a 400 Bad Request.
-            // This decision was made because the default behaviour is to silently fallback to the
+            // This decision was made because the default behavior is to silently fallback to the
             // empty body route, which generates 1 ID. I feel like this isn't as ergonomic as the
             // API telling you that you've made an error loudly so that you can fix it.
             let request: Option<GenerateRequest> = if body.is_empty() {
