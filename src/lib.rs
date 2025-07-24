@@ -2,10 +2,11 @@ use clap::Parser;
 use snowflake::SnowflakeIdGenerator;
 use std::{
     env,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use warp::Filter;
+use tokio::sync::Mutex;
+use warp::{http::StatusCode, Filter, Rejection, Reply};
 
 const MAX_DATA_CENTER_ID: u8 = (1 << 5) - 1;
 const MAX_WORKER_ID: u8 = (1 << 5) - 1;
@@ -81,49 +82,43 @@ pub fn create_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::
     let generate_api = warp::path!("generate")
         .and(warp::post())
         .and(warp::body::bytes())
-        .map(move |body: warp::hyper::body::Bytes| {
-            // NOTE(ayubun): We parse JSON manually to handle malformed JSON as a 400 Bad Request.
-            // This decision was made because the default behavior is to silently fallback to the
-            // empty body route, which generates 1 ID. I feel like this isn't as ergonomic as the
-            // API telling you that you've made an error loudly so that you can fix it.
-            let request: Option<GenerateRequest> = if body.is_empty() {
-                None
-            } else {
-                match serde_json::from_slice(&body) {
-                    Ok(req) => Some(req),
-                    Err(_) => {
-                        return warp::reply::with_status(
-                            "Invalid JSON format".to_string(),
-                            warp::http::StatusCode::BAD_REQUEST,
-                        );
+        .and_then(move |body: warp::hyper::body::Bytes| {
+            let snowflake_generator = snowflake_generator.clone();
+            async move {
+                // NOTE(ayubun): We parse JSON manually to handle malformed JSON as a 400 Bad Request.
+                // This decision was made because the default behavior is to silently fallback to the
+                // empty body route, which generates 1 ID. I feel like this isn't as ergonomic as the
+                // API telling you that you've made an error loudly so that you can fix it.
+                let request: GenerateRequest = if body.is_empty() {
+                    GenerateRequest { count: None }
+                } else {
+                    match serde_json::from_slice(&body) {
+                        Ok(req) => req,
+                        Err(_) => {
+                            let reply = warp::reply::json(&serde_json::json!({"error": "Invalid JSON format"}));
+                            return Ok(Box::new(warp::reply::with_status(reply, StatusCode::BAD_REQUEST)) as Box<dyn Reply>);
+                        }
                     }
+                };
+
+                let count = request.count.unwrap_or(1);
+
+                // NOTE(ayubun): We want to also return a 400 Bad Request for zero or negative count
+                // for similar reasons to the JSON parsing.
+                if count <= 0 {
+                    let reply = warp::reply::json(&serde_json::json!({"error": "Invalid count: must be a positive integer"}));
+                    return Ok(Box::new(warp::reply::with_status(reply, StatusCode::BAD_REQUEST)) as Box<dyn Reply>);
                 }
-            };
 
-            let count = request.and_then(|r| r.count).unwrap_or(1);
+                let mut ids: Vec<i64> = Vec::with_capacity(count as usize);
+                let mut unlocked_generator = snowflake_generator.lock().await;
+                for _ in 0..count {
+                    ids.push(unlocked_generator.real_time_generate());
+                }
 
-            // NOTE(ayubun): We want to also return a 400 Bad Request for zero or negative count
-            // for similar reasons to the JSON parsing.
-            if count <= 0 {
-                return warp::reply::with_status(
-                    "Invalid count: must be a positive integer".to_string(),
-                    warp::http::StatusCode::BAD_REQUEST,
-                );
+                let reply = warp::reply::json(&ids);
+                Ok(Box::new(warp::reply::with_status(reply, StatusCode::OK)) as Box<dyn Reply>)
             }
-
-            let mut ids: Vec<i64> = Vec::with_capacity(count as usize);
-            let mut unlocked_generator = snowflake_generator.lock().unwrap();
-            for _ in 0..count {
-                ids.push(unlocked_generator.real_time_generate());
-            }
-            let response = format!(
-                "[{}]",
-                ids.into_iter()
-                    .map(|id| id.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
-            warp::reply::with_status(response, warp::http::StatusCode::OK)
         });
 
     // TODO(ayubun): Add support for GRPC ? :3
@@ -168,7 +163,7 @@ fn snowflake_id_generator_from_env() -> SnowflakeIdGenerator {
                 "cannot split WORKER_ID from hostname (WORKER_ID is being parsed from hostname)",
             )
             .1
-            .parse::<u8>()
+            .parse()
             .expect(
                 "cannot parse WORKER_ID from hostname (WORKER_ID is being parsed from hostname)",
             )
@@ -346,7 +341,6 @@ mod tests {
         env::set_var("WORKER_ID", "0");
         env::set_var("DATA_CENTER_ID", "32");
         env::remove_var("EPOCH");
-
         snowflake_id_generator_from_env();
     }
 
@@ -356,7 +350,6 @@ mod tests {
         env::set_var("WORKER_ID", "32");
         env::set_var("DATA_CENTER_ID", "0");
         env::remove_var("EPOCH");
-
         snowflake_id_generator_from_env();
     }
 
