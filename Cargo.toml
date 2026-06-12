@@ -22,7 +22,6 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4.5.41", features = ["derive", "env"] }
 hostname = "0.4.1"
-rs-snowflake = "0.6.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
@@ -31,6 +30,7 @@ warp = "0.3.7"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+serial_test = "=3.5.0"
 tokio-test = "0.4"
 
 [[bench]]
