@@ -11,6 +11,8 @@ fn bench_single_generate(c: &mut Criterion) {
                 let resp = request()
                     .method("POST")
                     .path("/generate")
+                    // send content-length for the empty body
+                    .body("")
                     .reply(&routes)
                     .await;
                 black_box(resp)
@@ -20,6 +22,9 @@ fn bench_single_generate(c: &mut Criterion) {
 }
 
 fn bench_batch_generate(c: &mut Criterion) {
+    // raise the cap for large batch benchmarks
+    std::env::set_var("MAX_BATCH_SIZE", "10000000");
+
     let mut group = c.benchmark_group("batch_generate");
 
     for size in [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000].iter() {
@@ -89,8 +94,7 @@ fn bench_concurrent_single_generates(c: &mut Criterion) {
 
 fn bench_concurrent_batch_generates(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_batch_generates");
-    // NOTE(ayubun): I'm pretty sure this is going to be super machine dependent, since TOKIO_RUNTIME_THREADS
-    // is set to the number of cores on the machine by default
+    // results depend on the default tokio thread count
     for concurrent_requests in [2, 4, 6, 8, 10, 20, 50, 100, 200, 500, 1000].iter() {
         group.bench_with_input(
             BenchmarkId::new("Num Concurrent Requests", concurrent_requests),
@@ -129,7 +133,6 @@ fn bench_concurrent_batch_generates(c: &mut Criterion) {
     group.finish();
 }
 
-// NOTE(ayubun): These aren't really that important but why not ╮ (. ❛ ᴗ ❛.) ╭
 fn bench_http_error_handling(c: &mut Criterion) {
     let mut group = c.benchmark_group("http_error_handling");
 

@@ -16,8 +16,9 @@ The worker supports the following environment variables:
 |--|--|--|--|
 | `WORKER_ID` | `0` | `0` to `31`, or "`FROM_HOSTNAME`" | An identifier for the given worker. Setting this value to "`FROM_HOSTNAME`" will try to parse the worker ID from the end of the hostname. This feature is for workers being run in k8s StatefulSets |
 | `DATA_CENTER_ID` | `0` | `0` to `31` | An identifier for the location that a given set of workers are running on |
-| `EPOCH` | UNIX Epoch | `u64` | An optional environment variable that allows hosts to use a custom epoch. For example, Discord uses a custom epoch of `1420070400000` |
+| `EPOCH` | UNIX Epoch | `u64` | an optional custom epoch, such as discord's `1420070400000`; future epochs are rejected and recent epochs leave more of the 41-bit timestamp range available |
 | `PORT` | `8080` | `u16` | The port that the HTTP API listens to requests from. If you are using the snowflake-id-worker image, modifying this environment variable may also require adding a [Docker port forward](https://docs.docker.com/get-started/docker-concepts/running-containers/publishing-ports/) |
+| `MAX_BATCH_SIZE` | `100000` | `1` to `10000000` | the largest `count` accepted by `POST /generate`; larger requests return `400 Bad Request` |
 
 > [!IMPORTANT] 
 > To ensure the uniqueness of Snowflake IDs generated across a distributed system, all workers must have a unique combination
@@ -43,6 +44,19 @@ If a `count` is **not** specified in the request body, one snowflake ID will be 
 > [!NOTE]
 > The API will always return a list for consistency, even when returning a single snowflake ID
 
+**responses & limits:**
+
+| status | when |
+|--|--|
+| `200 OK` | success with a json array body |
+| `400 Bad Request` | malformed json, an unknown field, a non-positive `count`, or a count above `MAX_BATCH_SIZE` |
+| `411 Length Required` | missing `Content-Length`; use `-d ''` with curl for one id |
+| `413 Payload Too Large` | body exceeds 1 kib |
+| `429 Too Many Requests` | generation queue is full; includes `Retry-After` |
+
+> [!NOTE]
+> one worker is limited to 4096 ids per millisecond. excess work queues on one generator thread, then returns `429` when full. backward clock steps advance logical time until wall time catches up
+
 ### Benchmarks & Optimization Notes
 
 ---
@@ -52,6 +66,9 @@ If a `count` is **not** specified in the request body, one snowflake ID will be 
 > worker is essential for your use-case, you will want to factor batching into the design of your clients.
 
 The following benchmarks were performed on an Apple M1 Max (8 performance cores, 2 efficiency cores). Benchmark results will vary depending on the machine you perform them on. 
+
+> [!NOTE]
+> these numbers predate the lock-free generator; run `cargo bench` for current results
 
 ---
 
