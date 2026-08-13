@@ -26,6 +26,11 @@ services:
 > The HTTP API is registered on port 8080 within the image
 
 > [!IMPORTANT]
+> Always explicitly supply environment variables like `PORT`, even if they match the default values.
+> Relying on implicit defaults can break your deployment if they change in future versions
+> (e.g., v0.3.0 to v0.3.1 required a default port change for a bugfix).
+
+> [!IMPORTANT]
 > The above commands will pull the `snowflake-id-worker:0` image, which auto-updates upon bugfix and minor version changes. 
 > If you want to use a more static image version, you can supply one instead. Examples:
 > - `ghcr.io/ayubun/snowflake-id-worker:0.4`
