@@ -61,6 +61,37 @@ If a `count` is **not** specified in the request body, one snowflake ID will be 
 > A single worker generates at most 4096 snowflake IDs per millisecond. Requests beyond that queue up on the worker's generator thread, and once the queue
 > is full they receive a `429`. If the system clock steps backwards, the worker advances its logical time until wall time catches up
 
+### **GET** `/generate`
+---
+The same endpoint also answers `GET` requests, which makes it easy to grab snowflake IDs from a browser or a plain `curl` with no body.
+The `count` moves into the query string and everything else behaves exactly like `POST`, including the `MAX_BATCH_SIZE` limit and `429`
+backpressure. Any request body is ignored
+
+**BATCH:**
+
+```bash
+curl "http://localhost:8080/generate?count=3"
+# [7503449892136681472,7503449892136681473,7503449892136681474]
+```
+
+**SINGLE:**
+
+```bash
+curl http://localhost:8080/generate
+# [7503449892119904256]
+```
+
+<details>
+<summary>Below are the status codes returned by this endpoint</summary>
+
+| Status | When |
+|--|--|
+| `200 OK` | Success. The body is a JSON array of snowflake IDs |
+| `400 Bad Request` | The query string has an unknown field, a `count` that is not an integer, or a `count` that is not a positive integer within `MAX_BATCH_SIZE` |
+| `429 Too Many Requests` | The generation queue is full. The response includes a `Retry-After` header |
+
+</details>
+
 ### Benchmarks & Optimization Notes
 ---
 
