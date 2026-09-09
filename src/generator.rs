@@ -9,12 +9,18 @@
 //! restart safety assumes the clock does not move backwards across restarts
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread::yield_now;
+use std::thread::sleep;
+use std::time::Duration;
 
 const SEQUENCE_BITS: u8 = 12;
 const TIMESTAMP_SHIFT: u8 = 22;
 const DATA_CENTER_SHIFT: u8 = 17;
 const WORKER_SHIFT: u8 = 12;
+
+/// pause while the current millisecond's sequence is exhausted; sleeping
+/// instead of spinning stops a saturated worker from burning its cpu quota
+/// while it waits for the clock
+const SEQUENCE_EXHAUSTED_WAIT: Duration = Duration::from_micros(50);
 
 /// largest sequence value that fits in [`SEQUENCE_BITS`]
 pub const MAX_SEQUENCE: u16 = (1 << SEQUENCE_BITS) - 1;
@@ -69,7 +75,7 @@ impl<C: Clock> SnowflakeGenerator<C> {
                 }
             } else if now == last_millis {
                 // wait instead of borrowing from the future under load
-                yield_now();
+                sleep(SEQUENCE_EXHAUSTED_WAIT);
             } else {
                 // keep serving after a backward clock step exhausts the sequence
                 if self.try_claim(current, last_millis + 1, 0) {
