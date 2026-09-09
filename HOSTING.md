@@ -9,7 +9,7 @@ interacted with just like any other image. To run a single snowflake ID worker, 
 
 ### via `docker`:
 ```bash
-docker run -p 8080:8080 ghcr.io/ayubun/snowflake-id-worker:0
+docker run --cpus=0.5 --memory=64m -p 8080:8080 ghcr.io/ayubun/snowflake-id-worker:0
 ```
 ### via `docker compose up` / `compose.yaml`:
 ```yml
@@ -20,6 +20,11 @@ services:
     image: ghcr.io/ayubun/snowflake-id-worker:0
     ports:
       - 8080:8080
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 64M
 ```
 
 > [!NOTE] 
@@ -49,6 +54,11 @@ services:
     environment:
       - WORKER_ID=0
       - EPOCH=1420070400000
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 64M
   snowflake-id-worker-1:
     image: ghcr.io/ayubun/snowflake-id-worker:0
     restart: always
@@ -59,7 +69,32 @@ services:
     environment:
       - WORKER_ID=1
       - EPOCH=1420070400000
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 64M
 ```
 
 > [!IMPORTANT] 
 > The `EPOCH` environment variable must be consistent across all workers
+
+## Recommended Resources
+
+Half a CPU and 64 MiB per worker, as in the examples above. Half a CPU is enough to reach the generator's cap of 4096 IDs per millisecond
+with batch requests, so more CPU only speeds up single ID requests. Peak memory under load is about 12 MiB with the default `MAX_BATCH_SIZE`
+
+### via k8s `resources`:
+```yml
+resources:
+  requests:
+    cpu: 500m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 64Mi
+```
+
+> [!NOTE]
+> If you need more throughput, add workers with distinct `WORKER_ID`s rather than CPU, since each worker brings its own 4096 IDs per millisecond.
+> Raise the memory limit if you raise `MAX_BATCH_SIZE`

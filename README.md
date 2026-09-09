@@ -44,10 +44,8 @@ If a `count` is **not** specified in the request body, one snowflake ID will be 
 > [!NOTE]
 > The API will always return a list for consistency, even when returning a single snowflake ID
 
-**RESPONSES:**
-
 <details>
-<summary>Status codes returned by <strong>POST</strong> <code>/generate</code></summary>
+<summary>Below are the status codes returned by this endpoint</summary>
 
 | Status | When |
 |--|--|
@@ -71,8 +69,8 @@ If a `count` is **not** specified in the request body, one snowflake ID will be 
 > essential for your use-case, you will want to factor batching into the design of your clients.
 
 The benchmarks send requests in-process to a single-threaded tokio runtime (plus the worker's own generator thread), and on Linux the whole
-bench process is pinned to one CPU so it mirrors a worker running with a single CPU. Set `BENCH_CPUS` (for example `BENCH_CPUS=0,1`) to pin
-differently, and run them yourself with `cargo bench`. The results below are from one core of an AMD EPYC 9B45:
+bench process is pinned to one CPU so the HTTP thread and the generator thread share a core like they do in a deployed worker. Set `BENCH_CPUS`
+(for example `BENCH_CPUS=0,1`) to pin differently, and run them yourself with `cargo bench`. The results below are from one core of an AMD EPYC 9B45:
 
 | Request | Latency | Throughput |
 |--|--|--|
