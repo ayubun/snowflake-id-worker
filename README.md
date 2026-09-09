@@ -70,69 +70,72 @@ If a `count` is **not** specified in the request body, one snowflake ID will be 
 > Generating snowflake IDs in batches is far more efficient than generating them one at a time. If high throughput per worker is
 > essential for your use-case, you will want to factor batching into the design of your clients.
 
-The benchmarks send requests in-process to a single-threaded tokio runtime (plus the worker's own generator thread), so results are not
-skewed by how many cores the machine has. You can run them yourself with `cargo bench`. The results below are from an AMD EPYC 9B45:
+The benchmarks send requests in-process to a single-threaded tokio runtime (plus the worker's own generator thread), and on Linux the whole
+bench process is pinned to one CPU so it mirrors a worker running with a single CPU. Set `BENCH_CPUS` (for example `BENCH_CPUS=0,1`) to pin
+differently, and run them yourself with `cargo bench`. The results below are from one core of an AMD EPYC 9B45:
 
 | Request | Latency | Throughput |
 |--|--|--|
-| 1 request, single ID | 4.14µs | 242K IDs/sec |
-| 1 request, `{"count":100}` | 24.4µs | 4.10M IDs/sec |
-| 1 request, `{"count":10000}` | 2.44ms | 4.10M IDs/sec |
-| 100 concurrent requests, single ID each | 137µs | 730K IDs/sec |
+| 1 request, single ID | 3.03µs | 330K IDs/sec |
+| 1 request, `{"count":100}` | 24.5µs | 4.08M IDs/sec |
+| 1 request, `{"count":10000}` | 2.45ms | 4.08M IDs/sec |
+| 100 concurrent requests, single ID each | 201µs | 498K IDs/sec |
 
 Batches of 100 or more saturate the generator's cap of 4096 IDs per millisecond. Single ID requests spend most of their time on the round trip
 between the HTTP handler and the generator thread, which is why sending them concurrently helps but still lands well short of batching.
+See [HOSTING](./HOSTING.md#recommended-resources) for what this means when sizing a deployment.
 
 <details>
 <summary><strong>Raw</strong> <code>cargo bench</code> <strong>output:</strong></summary>
 
 ```
+bench pinned to cpus [0]
 starting snowflake-id-worker with WORKER_ID: 0, DATA_CENTER_ID: 0, and EPOCH: 0
-generate/count/1        time:   [4.0615 µs 4.1355 µs 4.2125 µs]
-                        thrpt:  [237.39 Kelem/s 241.81 Kelem/s 246.21 Kelem/s]
-Found 4 outliers among 100 measurements (4.00%)
+generate/count/1        time:   [2.9730 µs 3.0258 µs 3.0919 µs]
+                        thrpt:  [323.43 Kelem/s 330.49 Kelem/s 336.36 Kelem/s]
+Found 15 outliers among 100 measurements (15.00%)
   3 (3.00%) high mild
-  1 (1.00%) high severe
-generate/count/10       time:   [4.5952 µs 4.6462 µs 4.6971 µs]
-                        thrpt:  [2.1290 Melem/s 2.1523 Melem/s 2.1762 Melem/s]
-Found 4 outliers among 100 measurements (4.00%)
-  3 (3.00%) high mild
-  1 (1.00%) high severe
-generate/count/100      time:   [24.402 µs 24.418 µs 24.439 µs]
-                        thrpt:  [4.0919 Melem/s 4.0953 Melem/s 4.0981 Melem/s]
-Found 13 outliers among 100 measurements (13.00%)
-  3 (3.00%) low severe
+  12 (12.00%) high severe
+generate/count/10       time:   [3.7480 µs 3.7905 µs 3.8417 µs]
+                        thrpt:  [2.6030 Melem/s 2.6381 Melem/s 2.6681 Melem/s]
+Found 8 outliers among 100 measurements (8.00%)
+  8 (8.00%) high severe
+generate/count/100      time:   [24.439 µs 24.492 µs 24.558 µs]
+                        thrpt:  [4.0721 Melem/s 4.0830 Melem/s 4.0919 Melem/s]
+Found 24 outliers among 100 measurements (24.00%)
+  5 (5.00%) low severe
   1 (1.00%) low mild
   1 (1.00%) high mild
-  8 (8.00%) high severe
-generate/count/1000     time:   [243.95 µs 244.19 µs 244.44 µs]
-                        thrpt:  [4.0910 Melem/s 4.0951 Melem/s 4.0993 Melem/s]
-Found 14 outliers among 100 measurements (14.00%)
-  5 (5.00%) low severe
-  2 (2.00%) low mild
+  17 (17.00%) high severe
+generate/count/1000     time:   [244.64 µs 245.31 µs 246.17 µs]
+                        thrpt:  [4.0622 Melem/s 4.0765 Melem/s 4.0877 Melem/s]
+Found 9 outliers among 100 measurements (9.00%)
+  2 (2.00%) low severe
+  1 (1.00%) low mild
+  6 (6.00%) high severe
+generate/count/10000    time:   [2.4429 ms 2.4484 ms 2.4545 ms]
+                        thrpt:  [4.0742 Melem/s 4.0843 Melem/s 4.0935 Melem/s]
+Found 2 outliers among 100 measurements (2.00%)
   2 (2.00%) high mild
-  5 (5.00%) high severe
-generate/count/10000    time:   [2.4377 ms 2.4413 ms 2.4451 ms]
-                        thrpt:  [4.0898 Melem/s 4.0961 Melem/s 4.1023 Melem/s]
-generate/count/100000   time:   [24.425 ms 24.456 ms 24.488 ms]
-                        thrpt:  [4.0836 Melem/s 4.0890 Melem/s 4.0941 Melem/s]
+generate/count/100000   time:   [24.539 ms 24.612 ms 24.699 ms]
+                        thrpt:  [4.0488 Melem/s 4.0631 Melem/s 4.0751 Melem/s]
+Found 5 outliers among 100 measurements (5.00%)
+  1 (1.00%) high mild
+  4 (4.00%) high severe
 
 starting snowflake-id-worker with WORKER_ID: 0, DATA_CENTER_ID: 0, and EPOCH: 0
 concurrent_single_generates/requests/10
-                        time:   [13.084 µs 13.212 µs 13.368 µs]
-                        thrpt:  [748.04 Kelem/s 756.90 Kelem/s 764.27 Kelem/s]
-Found 12 outliers among 100 measurements (12.00%)
-  4 (4.00%) low mild
-  2 (2.00%) high mild
-  6 (6.00%) high severe
-concurrent_single_generates/requests/100
-                        time:   [136.44 µs 136.90 µs 137.42 µs]
-                        thrpt:  [727.68 Kelem/s 730.45 Kelem/s 732.91 Kelem/s]
-Found 9 outliers among 100 measurements (9.00%)
-  1 (1.00%) low severe
-  1 (1.00%) low mild
+                        time:   [19.533 µs 19.717 µs 19.951 µs]
+                        thrpt:  [501.23 Kelem/s 507.17 Kelem/s 511.97 Kelem/s]
+Found 11 outliers among 100 measurements (11.00%)
   3 (3.00%) high mild
-  4 (4.00%) high severe
+  8 (8.00%) high severe
+concurrent_single_generates/requests/100
+                        time:   [192.24 µs 200.68 µs 209.45 µs]
+                        thrpt:  [477.44 Kelem/s 498.31 Kelem/s 520.19 Kelem/s]
+Found 19 outliers among 100 measurements (19.00%)
+  9 (9.00%) high mild
+  10 (10.00%) high severe
 ```
 </details>
 
