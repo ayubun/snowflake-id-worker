@@ -16,9 +16,9 @@ The worker supports the following environment variables:
 |--|--|--|--|
 | `WORKER_ID` | `0` | `0` to `31`, or "`FROM_HOSTNAME`" | An identifier for the given worker. Setting this value to "`FROM_HOSTNAME`" will try to parse the worker ID from the end of the hostname. This feature is for workers being run in k8s StatefulSets |
 | `DATA_CENTER_ID` | `0` | `0` to `31` | An identifier for the location that a given set of workers are running on |
-| `EPOCH` | UNIX Epoch | `u64` | an optional custom epoch, such as discord's `1420070400000`; future epochs are rejected and recent epochs leave more of the 41-bit timestamp range available |
+| `EPOCH` | UNIX Epoch | `u64` | An optional environment variable that allows hosts to use a custom epoch. For example, Discord uses a custom epoch of `1420070400000`. Epochs in the future are rejected, and a more recent epoch leaves more of the 41-bit timestamp range available |
 | `PORT` | `8080` | `u16` | The port that the HTTP API listens to requests from. If you are using the snowflake-id-worker image, modifying this environment variable may also require adding a [Docker port forward](https://docs.docker.com/get-started/docker-concepts/running-containers/publishing-ports/) |
-| `MAX_BATCH_SIZE` | `100000` | `1` to `10000000` | the largest `count` accepted by `POST /generate`; larger requests return `400 Bad Request` |
+| `MAX_BATCH_SIZE` | `100000` | `1` to `10000000` | The largest `count` accepted by `POST /generate`. Requests with a larger `count` will return a `400 Bad Request` |
 
 > [!IMPORTANT] 
 > To ensure the uniqueness of Snowflake IDs generated across a distributed system, all workers must have a unique combination
@@ -44,248 +44,97 @@ If a `count` is **not** specified in the request body, one snowflake ID will be 
 > [!NOTE]
 > The API will always return a list for consistency, even when returning a single snowflake ID
 
-**responses & limits:**
+**RESPONSES:**
 
-| status | when |
+<details>
+<summary>Status codes returned by <strong>POST</strong> <code>/generate</code></summary>
+
+| Status | When |
 |--|--|
-| `200 OK` | success with a json array body |
-| `400 Bad Request` | malformed json, an unknown field, a non-positive `count`, or a count above `MAX_BATCH_SIZE` |
-| `411 Length Required` | missing `Content-Length`; use `-d ''` with curl for one id |
-| `413 Payload Too Large` | body exceeds 1 kib |
-| `429 Too Many Requests` | generation queue is full; includes `Retry-After` |
+| `200 OK` | Success. The body is a JSON array of snowflake IDs |
+| `400 Bad Request` | The body is malformed JSON, contains an unknown field, or has a `count` that is not a positive integer within `MAX_BATCH_SIZE` |
+| `411 Length Required` | The request has no `Content-Length` header. With curl, pass `-d ''` to request a single snowflake ID |
+| `413 Payload Too Large` | The request body is larger than 1 KiB |
+| `429 Too Many Requests` | The generation queue is full. The response includes a `Retry-After` header |
+
+</details>
 
 > [!NOTE]
-> one worker is limited to 4096 ids per millisecond. excess work queues on one generator thread, then returns `429` when full. backward clock steps advance logical time until wall time catches up
+> A single worker generates at most 4096 snowflake IDs per millisecond. Requests beyond that queue up on the worker's generator thread, and once the queue
+> is full they receive a `429`. If the system clock steps backwards, the worker advances its logical time until wall time catches up
 
 ### Benchmarks & Optimization Notes
-
 ---
 
-> [!IMPORTANT] 
-> The overall bench results imply that it is significantly more efficient to generate batches of snowflakes. If high throughput per
-> worker is essential for your use-case, you will want to factor batching into the design of your clients.
+> [!IMPORTANT]
+> Generating snowflake IDs in batches is far more efficient than generating them one at a time. If high throughput per worker is
+> essential for your use-case, you will want to factor batching into the design of your clients.
 
-The following benchmarks were performed on an Apple M1 Max (8 performance cores, 2 efficiency cores). Benchmark results will vary depending on the machine you perform them on. 
+The benchmarks send requests in-process to a single-threaded tokio runtime (plus the worker's own generator thread), so results are not
+skewed by how many cores the machine has. You can run them yourself with `cargo bench`. The results below are from an AMD EPYC 9B45:
 
-> [!NOTE]
-> these numbers predate the lock-free generator; run `cargo bench` for current results
+| Request | Latency | Throughput |
+|--|--|--|
+| 1 request, single ID | 4.14µs | 242K IDs/sec |
+| 1 request, `{"count":100}` | 24.4µs | 4.10M IDs/sec |
+| 1 request, `{"count":10000}` | 2.44ms | 4.10M IDs/sec |
+| 100 concurrent requests, single ID each | 137µs | 730K IDs/sec |
 
----
+Batches of 100 or more saturate the generator's cap of 4096 IDs per millisecond. Single ID requests spend most of their time on the round trip
+between the HTTP handler and the generator thread, which is why sending them concurrently helps but still lands well short of batching.
 
 <details>
-<summary><strong>Running</strong> <code>cargo bench concurrent_single_generates</code><strong>:</strong></summary>
+<summary><strong>Raw</strong> <code>cargo bench</code> <strong>output:</strong></summary>
 
-*Raw console output:*
 ```
-concurrent_single_generates/Num Concurrent Requests/2
-                        time:   [263.34 µs 268.70 µs 275.66 µs]
-                        change: [+5.8956% +8.5359% +11.966%] (p = 0.00 < 0.05)
-                        Performance has regressed.
-Found 7 outliers among 100 measurements (7.00%)
-  2 (2.00%) low mild
-  1 (1.00%) high mild
-  4 (4.00%) high severe
-concurrent_single_generates/Num Concurrent Requests/10
-                        time:   [278.64 µs 280.12 µs 281.76 µs]
-                        change: [-0.7562% +2.6252% +5.8729%] (p = 0.12 > 0.05)
-                        No change in performance detected.
-Found 9 outliers among 100 measurements (9.00%)
-  2 (2.00%) high mild
-  7 (7.00%) high severe
-concurrent_single_generates/Num Concurrent Requests/20
-                        time:   [315.34 µs 324.13 µs 334.49 µs]
-                        change: [+3.1232% +6.0181% +8.7006%] (p = 0.00 < 0.05)
-                        Performance has regressed.
-Found 6 outliers among 100 measurements (6.00%)
-  4 (4.00%) high mild
-  2 (2.00%) high severe
-concurrent_single_generates/Num Concurrent Requests/50
-                        time:   [393.76 µs 411.10 µs 432.01 µs]
-                        change: [-19.920% -12.821% -5.6858%] (p = 0.00 < 0.05)
-                        Performance has improved.
-Found 9 outliers among 100 measurements (9.00%)
-  3 (3.00%) high mild
-  6 (6.00%) high severe
-concurrent_single_generates/Num Concurrent Requests/100
-                        time:   [488.86 µs 514.40 µs 551.89 µs]
-                        change: [-1.2583% +4.0012% +10.702%] (p = 0.20 > 0.05)
-                        No change in performance detected.
-Found 8 outliers among 100 measurements (8.00%)
-  3 (3.00%) high mild
-  5 (5.00%) high severe
-concurrent_single_generates/Num Concurrent Requests/200
-                        time:   [701.39 µs 707.50 µs 714.44 µs]
-                        change: [-18.724% -14.526% -10.781%] (p = 0.00 < 0.05)
-                        Performance has improved.
-Found 1 outliers among 100 measurements (1.00%)
-  1 (1.00%) high mild
-Benchmarking concurrent_single_generates/Num Concurrent Requests/500: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 6.8s, enable flat sampling, or reduce sample count to 60.
-concurrent_single_generates/Num Concurrent Requests/500
-                        time:   [1.4297 ms 1.4559 ms 1.4921 ms]
-                        change: [-1.2106% +4.1416% +10.287%] (p = 0.18 > 0.05)
-                        No change in performance detected.
-Found 10 outliers among 100 measurements (10.00%)
-  3 (3.00%) high mild
-  7 (7.00%) high severe
-concurrent_single_generates/Num Concurrent Requests/1000
-                        time:   [2.3843 ms 2.3949 ms 2.4065 ms]
-                        change: [-8.1474% -5.4694% -3.4899%] (p = 0.00 < 0.05)
-                        Performance has improved.
-Found 5 outliers among 100 measurements (5.00%)
-  2 (2.00%) high mild
-  3 (3.00%) high severe
-concurrent_single_generates/Num Concurrent Requests/10000
-                        time:   [20.438 ms 20.879 ms 21.617 ms]
-Found 3 outliers among 100 measurements (3.00%)
-  2 (2.00%) high mild
-  1 (1.00%) high severe
-Benchmarking concurrent_single_generates/Num Concurrent Requests/100000: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 21.0s, or reduce sample count to 20.
-concurrent_single_generates/Num Concurrent Requests/100000
-                        time:   [205.62 ms 207.60 ms 210.02 ms]
-Found 8 outliers among 100 measurements (8.00%)
-  1 (1.00%) low mild
-  2 (2.00%) high mild
-  5 (5.00%) high severe
-Benchmarking concurrent_single_generates/Num Concurrent Requests/1000000: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 206.7s, or reduce sample count to 10.
-concurrent_single_generates/Num Concurrent Requests/1000000
-                        time:   [2.0523 s 2.0643 s 2.0765 s]
-Found 1 outliers among 100 measurements (1.00%)
-  1 (1.00%) high mild
-```
-</details>
-
-
-| Concurrent Requests | Latency | Theoretical Throughput |
-|-------------------------|-------------|------------------------|
-| 2 | 269μs | 7,444 req/sec |
-| 10 | 280μs | 35,702 req/sec |
-| 20 | 324μs | 61,718 req/sec |
-| 50 | 411μs | 121,634 req/sec |
-| 100 | 514μs | 194,403 req/sec |
-| 200 | 708μs | 282,685 req/sec |
-| 500 | 1.46ms | 343,445 req/sec |
-| 1,000 | 2.39ms | 417,563 req/sec |
-| 10,000 | 20.9ms | 478,947 req/sec |
-| 100,000 | 208ms | 481,618 req/sec |
-| 1,000,000 | 2.06s | 484,438 req/sec |
-
----
-
-<details>
-<summary><strong>Running</strong> <code>cargo bench concurrent_batch_generates</code><strong>:</strong></summary>
-
-*Raw console output:*
-```
-concurrent_batch_generates/Num Concurrent Requests/2
-                        time:   [273.05 µs 279.10 µs 286.71 µs]
-                        change: [+1.0647% +2.9058% +4.7268%] (p = 0.00 < 0.05)
-                        Performance has regressed.
-Found 7 outliers among 100 measurements (7.00%)
-  4 (4.00%) high mild
-  3 (3.00%) high severe
-concurrent_batch_generates/Num Concurrent Requests/4
-                        time:   [295.17 µs 300.76 µs 310.53 µs]
-                        change: [+2.3508% +5.7233% +10.772%] (p = 0.00 < 0.05)
-                        Performance has regressed.
-Found 9 outliers among 100 measurements (9.00%)
-  6 (6.00%) high mild
-  3 (3.00%) high severe
-concurrent_batch_generates/Num Concurrent Requests/6
-                        time:   [327.68 µs 335.50 µs 345.46 µs]
-                        change: [-0.8847% +7.0589% +16.790%] (p = 0.15 > 0.05)
-                        No change in performance detected.
+starting snowflake-id-worker with WORKER_ID: 0, DATA_CENTER_ID: 0, and EPOCH: 0
+generate/count/1        time:   [4.0615 µs 4.1355 µs 4.2125 µs]
+                        thrpt:  [237.39 Kelem/s 241.81 Kelem/s 246.21 Kelem/s]
 Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+generate/count/10       time:   [4.5952 µs 4.6462 µs 4.6971 µs]
+                        thrpt:  [2.1290 Melem/s 2.1523 Melem/s 2.1762 Melem/s]
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+generate/count/100      time:   [24.402 µs 24.418 µs 24.439 µs]
+                        thrpt:  [4.0919 Melem/s 4.0953 Melem/s 4.0981 Melem/s]
+Found 13 outliers among 100 measurements (13.00%)
+  3 (3.00%) low severe
+  1 (1.00%) low mild
+  1 (1.00%) high mild
+  8 (8.00%) high severe
+generate/count/1000     time:   [243.95 µs 244.19 µs 244.44 µs]
+                        thrpt:  [4.0910 Melem/s 4.0951 Melem/s 4.0993 Melem/s]
+Found 14 outliers among 100 measurements (14.00%)
+  5 (5.00%) low severe
+  2 (2.00%) low mild
   2 (2.00%) high mild
-  2 (2.00%) high severe
-concurrent_batch_generates/Num Concurrent Requests/8
-                        time:   [344.48 µs 345.89 µs 347.39 µs]
-                        change: [-7.4563% -5.4143% -3.5829%] (p = 0.00 < 0.05)
-                        Performance has improved.
-Found 7 outliers among 100 measurements (7.00%)
+  5 (5.00%) high severe
+generate/count/10000    time:   [2.4377 ms 2.4413 ms 2.4451 ms]
+                        thrpt:  [4.0898 Melem/s 4.0961 Melem/s 4.1023 Melem/s]
+generate/count/100000   time:   [24.425 ms 24.456 ms 24.488 ms]
+                        thrpt:  [4.0836 Melem/s 4.0890 Melem/s 4.0941 Melem/s]
+
+starting snowflake-id-worker with WORKER_ID: 0, DATA_CENTER_ID: 0, and EPOCH: 0
+concurrent_single_generates/requests/10
+                        time:   [13.084 µs 13.212 µs 13.368 µs]
+                        thrpt:  [748.04 Kelem/s 756.90 Kelem/s 764.27 Kelem/s]
+Found 12 outliers among 100 measurements (12.00%)
+  4 (4.00%) low mild
+  2 (2.00%) high mild
+  6 (6.00%) high severe
+concurrent_single_generates/requests/100
+                        time:   [136.44 µs 136.90 µs 137.42 µs]
+                        thrpt:  [727.68 Kelem/s 730.45 Kelem/s 732.91 Kelem/s]
+Found 9 outliers among 100 measurements (9.00%)
   1 (1.00%) low severe
   1 (1.00%) low mild
-  2 (2.00%) high mild
-  3 (3.00%) high severe
-concurrent_batch_generates/Num Concurrent Requests/10
-                        time:   [377.93 µs 381.92 µs 389.11 µs]
-                        change: [-1.3829% +2.0156% +6.8516%] (p = 0.42 > 0.05)
-                        No change in performance detected.
-Found 10 outliers among 100 measurements (10.00%)
-  6 (6.00%) high mild
+  3 (3.00%) high mild
   4 (4.00%) high severe
-concurrent_batch_generates/Num Concurrent Requests/20
-                        time:   [517.85 µs 541.65 µs 573.03 µs]
-                        change: [-3.7601% -0.4496% +3.2736%] (p = 0.82 > 0.05)
-                        No change in performance detected.
-Found 11 outliers among 100 measurements (11.00%)
-  6 (6.00%) high mild
-  5 (5.00%) high severe
-Benchmarking concurrent_batch_generates/Num Concurrent Requests/50: Warming up for 3.0000 s
-Warning: Unable to complete 100 samples in 5.0s. You may wish to increase target time to 5.1s, enable flat sampling, or reduce sample count to 60.
-concurrent_batch_generates/Num Concurrent Requests/50
-                        time:   [1.0024 ms 1.0059 ms 1.0105 ms]
-                        change: [+0.1373% +0.9971% +1.9716%] (p = 0.03 < 0.05)
-                        Change within noise threshold.
-Found 25 outliers among 100 measurements (25.00%)
-  3 (3.00%) low severe
-  2 (2.00%) low mild
-  3 (3.00%) high mild
-  17 (17.00%) high severe
-concurrent_batch_generates/Num Concurrent Requests/100
-                        time:   [2.0011 ms 2.0036 ms 2.0066 ms]
-                        change: [-0.8395% -0.3760% -0.0200%] (p = 0.07 > 0.05)
-                        No change in performance detected.
-Found 13 outliers among 100 measurements (13.00%)
-  3 (3.00%) low mild
-  3 (3.00%) high mild
-  7 (7.00%) high severe
-concurrent_batch_generates/Num Concurrent Requests/200
-                        time:   [4.6446 ms 4.7708 ms 4.9470 ms]
-                        change: [+2.5601% +5.2743% +9.0748%] (p = 0.00 < 0.05)
-                        Performance has regressed.
-Found 9 outliers among 100 measurements (9.00%)
-  2 (2.00%) high mild
-  7 (7.00%) high severe
-concurrent_batch_generates/Num Concurrent Requests/500
-                        time:   [12.167 ms 12.332 ms 12.559 ms]
-                        change: [+0.1147% +1.4656% +3.3595%] (p = 0.07 > 0.05)
-                        No change in performance detected.
-Found 6 outliers among 100 measurements (6.00%)
-  1 (1.00%) high mild
-  5 (5.00%) high severe
-concurrent_batch_generates/Num Concurrent Requests/1000
-                        time:   [24.657 ms 24.909 ms 25.318 ms]
-                        change: [-0.6338% +0.7789% +2.4971%] (p = 0.42 > 0.05)
-                        No change in performance detected.
-Found 19 outliers among 100 measurements (19.00%)
-  8 (8.00%) low mild
-  8 (8.00%) high mild
-  3 (3.00%) high severe
 ```
 </details>
-
-
-
-| Concurrent Requests | Latency | Theoretical Throughput |
-|-------------------------|-------------|----------------------|
-| 2 | 279μs | 7,166 req/sec |
-| 4 | 301μs | 13,300 req/sec |
-| 6 | 336μs | 17,886 req/sec |
-| 8 | 346μs | 23,128 req/sec |
-| 10 | 382μs | 26,180 req/sec |
-| 20 | 542μs | 36,920 req/sec |
-| 50 | 1.01ms | 49,700 req/sec |
-| 100 | 2.00ms | 49,900 req/sec |
-| 200 | 4.77ms | 42,000 req/sec |
-| 500 | 12.33ms | 40,500 req/sec |
-| 1,000 | 24.91ms | 40,000 req/sec |
-
-> [!NOTE] 
-> The `concurrent_batch_generates` bench submits concurrent batch requests for 100 snowflake IDs each. This means the theoretical ID
-> throughput is 100x the requests per second. 
 
 ---
 

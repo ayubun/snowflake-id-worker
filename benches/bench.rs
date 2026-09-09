@@ -1,90 +1,85 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+//! in-process request benchmarks on a single-threaded tokio runtime
+
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use serde_json::json;
 use snowflake_id_worker::create_routes;
+use tokio::runtime::{Builder, Runtime};
+use tokio::task::JoinSet;
+use warp::http::StatusCode;
 use warp::test::request;
 
-fn bench_single_generate(c: &mut Criterion) {
-    c.bench_function("single_generate", |b| {
-        b.iter(|| {
-            tokio::runtime::Runtime::new().unwrap().block_on(async {
-                let routes = create_routes();
+/// one async thread keeps results comparable across machines; generation still
+/// runs on the worker's dedicated generator thread
+fn single_thread_runtime() -> Runtime {
+    Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime")
+}
+
+/// one `POST /generate` per iteration; an empty body requests a single id
+fn bench_generate(c: &mut Criterion) {
+    let runtime = single_thread_runtime();
+    let routes = create_routes();
+    let mut group = c.benchmark_group("generate");
+
+    for count in [1usize, 10, 100, 1_000, 10_000, 100_000] {
+        let body = if count == 1 {
+            String::new()
+        } else {
+            json!({"count": count}).to_string()
+        };
+        group.throughput(Throughput::Elements(count as u64));
+        group.bench_with_input(BenchmarkId::new("count", count), &body, |b, body| {
+            b.to_async(&runtime).iter(|| async {
                 let resp = request()
                     .method("POST")
                     .path("/generate")
-                    // send content-length for the empty body
-                    .body("")
+                    .body(body)
                     .reply(&routes)
                     .await;
-                black_box(resp)
-            })
-        })
-    });
-}
-
-fn bench_batch_generate(c: &mut Criterion) {
-    // raise the cap for large batch benchmarks
-    std::env::set_var("MAX_BATCH_SIZE", "10000000");
-
-    let mut group = c.benchmark_group("batch_generate");
-
-    for size in [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000].iter() {
-        group.bench_with_input(BenchmarkId::new("batch", size), size, |b, &size| {
-            let payload = json!({"count": size});
-            b.iter(|| {
-                tokio::runtime::Runtime::new().unwrap().block_on(async {
-                    let routes = create_routes();
-                    let resp = request()
-                        .method("POST")
-                        .path("/generate")
-                        .json(&payload)
-                        .reply(&routes)
-                        .await;
-                    black_box(resp)
-                })
+                assert_eq!(resp.status(), StatusCode::OK);
+                resp
             })
         });
     }
     group.finish();
 }
 
+/// many single-id requests in flight at once; compare against `generate/count`
+/// at the same total id count to see the cost of not batching
 fn bench_concurrent_single_generates(c: &mut Criterion) {
+    let runtime = single_thread_runtime();
+    let routes = create_routes();
     let mut group = c.benchmark_group("concurrent_single_generates");
-    for concurrent_requests in [
-        2, 10, 20, 50, 100, 200, 500, 1_000, 10_000, 100_000, 1_000_000,
-    ]
-    .iter()
-    {
+
+    // stay under the 256-deep generation queue so no request receives 429
+    for requests in [10usize, 100] {
+        group.throughput(Throughput::Elements(requests as u64));
         group.bench_with_input(
-            BenchmarkId::new("Num Concurrent Requests", concurrent_requests),
-            concurrent_requests,
-            |b, &concurrent_requests| {
-                b.iter(|| {
-                    tokio::runtime::Runtime::new().unwrap().block_on(async {
-                        let routes = create_routes();
-                        let payload = json!({"count": 1});
-
-                        let mut handles = Vec::new();
-                        for _ in 0..concurrent_requests {
-                            let routes_clone = routes.clone();
-                            let payload_clone = payload.clone();
-
-                            let handle = tokio::spawn(async move {
-                                request()
-                                    .method("POST")
-                                    .path("/generate")
-                                    .json(&payload_clone)
-                                    .reply(&routes_clone)
-                                    .await
-                            });
-                            handles.push(handle);
-                        }
-
-                        let mut responses = Vec::new();
-                        for handle in handles {
-                            responses.push(handle.await.unwrap());
-                        }
-                        black_box(responses)
-                    })
+            BenchmarkId::new("requests", requests),
+            &requests,
+            |b, &requests| {
+                b.to_async(&runtime).iter(|| async {
+                    let mut in_flight = JoinSet::new();
+                    for _ in 0..requests {
+                        let routes = routes.clone();
+                        in_flight.spawn(async move {
+                            request()
+                                .method("POST")
+                                .path("/generate")
+                                .body("")
+                                .reply(&routes)
+                                .await
+                        });
+                    }
+                    let mut responses = Vec::with_capacity(requests);
+                    while let Some(joined) = in_flight.join_next().await {
+                        let resp = joined.expect("request task panicked");
+                        assert_eq!(resp.status(), StatusCode::OK);
+                        responses.push(resp);
+                    }
+                    responses
                 })
             },
         );
@@ -92,106 +87,5 @@ fn bench_concurrent_single_generates(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_concurrent_batch_generates(c: &mut Criterion) {
-    let mut group = c.benchmark_group("concurrent_batch_generates");
-    // results depend on the default tokio thread count
-    for concurrent_requests in [2, 4, 6, 8, 10, 20, 50, 100, 200, 500, 1000].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("Num Concurrent Requests", concurrent_requests),
-            concurrent_requests,
-            |b, &concurrent_requests| {
-                b.iter(|| {
-                    tokio::runtime::Runtime::new().unwrap().block_on(async {
-                        let routes = create_routes();
-                        let payload = json!({"count": 100});
-
-                        let mut handles = Vec::new();
-                        for _ in 0..concurrent_requests {
-                            let routes_clone = routes.clone();
-                            let payload_clone = payload.clone();
-                            let handle = tokio::spawn(async move {
-                                request()
-                                    .method("POST")
-                                    .path("/generate")
-                                    .json(&payload_clone)
-                                    .reply(&routes_clone)
-                                    .await
-                            });
-                            handles.push(handle);
-                        }
-
-                        let mut responses = Vec::new();
-                        for handle in handles {
-                            responses.push(handle.await.unwrap());
-                        }
-                        black_box(responses)
-                    })
-                })
-            },
-        );
-    }
-    group.finish();
-}
-
-fn bench_http_error_handling(c: &mut Criterion) {
-    let mut group = c.benchmark_group("http_error_handling");
-
-    group.bench_function("zero_count_error", |b| {
-        let payload = json!({"count": 0});
-        b.iter(|| {
-            tokio::runtime::Runtime::new().unwrap().block_on(async {
-                let routes = create_routes();
-                let resp = request()
-                    .method("POST")
-                    .path("/generate")
-                    .json(&payload)
-                    .reply(&routes)
-                    .await;
-                black_box(resp)
-            })
-        })
-    });
-
-    group.bench_function("negative_count_error", |b| {
-        let payload = json!({"count": -5});
-        b.iter(|| {
-            tokio::runtime::Runtime::new().unwrap().block_on(async {
-                let routes = create_routes();
-                let resp = request()
-                    .method("POST")
-                    .path("/generate")
-                    .json(&payload)
-                    .reply(&routes)
-                    .await;
-                black_box(resp)
-            })
-        })
-    });
-
-    group.bench_function("malformed_json_error", |b| {
-        b.iter(|| {
-            tokio::runtime::Runtime::new().unwrap().block_on(async {
-                let routes = create_routes();
-                let resp = request()
-                    .method("POST")
-                    .path("/generate")
-                    .body(b"invalid json")
-                    .reply(&routes)
-                    .await;
-                black_box(resp)
-            })
-        })
-    });
-
-    group.finish();
-}
-
-criterion_group!(
-    benches,
-    bench_single_generate,
-    bench_batch_generate,
-    bench_concurrent_single_generates,
-    bench_concurrent_batch_generates,
-    bench_http_error_handling
-);
+criterion_group!(benches, bench_generate, bench_concurrent_single_generates);
 criterion_main!(benches);
