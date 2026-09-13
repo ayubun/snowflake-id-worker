@@ -5,6 +5,7 @@ mod generator;
 use clap::Parser;
 use generator::{Clock, SnowflakeGenerator, MAX_TIMESTAMP_MILLIS};
 use std::{
+    convert::Infallible,
     env,
     panic::{self, AssertUnwindSafe},
     process,
@@ -34,6 +35,7 @@ const MAX_BODY_BYTES: u64 = 1_024;
 /// bounded queue depth before requests receive 429
 const GENERATION_QUEUE_CAPACITY: usize = 256;
 
+/// shared by the json body on `POST` and the query string on `GET`
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GenerateRequest {
@@ -118,18 +120,34 @@ fn create_routes_from_args(
 
     let health_api = warp::path!("health").and(warp::get()).map(|| "OK");
 
-    let generate_api = warp::path!("generate")
+    let generate_path = warp::path!("generate");
+
+    let post_sender = job_sender.clone();
+    let generate_post = generate_path
         .and(warp::post())
         // reject oversized bodies before buffering them
         .and(warp::body::content_length_limit(MAX_BODY_BYTES))
         .and(warp::body::bytes())
         .then(move |body: Bytes| {
+            let job_sender = post_sender.clone();
+            async move { handle_generate_post(body, job_sender, max_batch_size).await }
+        });
+
+    let generate_get = generate_path
+        .and(warp::get())
+        .and(raw_query_or_empty())
+        .then(move |query: String| {
             let job_sender = job_sender.clone();
-            async move { handle_generate(body, job_sender, max_batch_size).await }
+            async move { handle_generate_get(query, job_sender, max_batch_size).await }
         });
 
     // todo(ayubun): add grpc support
-    generate_api.or(health_api)
+    generate_post.or(generate_get).or(health_api)
+}
+
+/// `warp::query::raw` rejects requests without a query string; treat those as empty
+fn raw_query_or_empty() -> impl Filter<Extract = (String,), Error = Infallible> + Clone {
+    warp::query::raw().or(warp::any().map(String::new)).unify()
 }
 
 struct GenerateJob {
@@ -163,7 +181,7 @@ fn spawn_generator_thread(
     });
 }
 
-async fn handle_generate(
+async fn handle_generate_post(
     body: Bytes,
     job_sender: mpsc::Sender<GenerateJob>,
     max_batch_size: usize,
@@ -178,7 +196,30 @@ async fn handle_generate(
         }
     };
 
-    let count = request.and_then(|r| r.count).unwrap_or(1);
+    generate_response(request.and_then(|r| r.count), job_sender, max_batch_size).await
+}
+
+async fn handle_generate_get(
+    query: String,
+    job_sender: mpsc::Sender<GenerateJob>,
+    max_batch_size: usize,
+) -> Response {
+    // an empty query string deserializes to no count, which means one id
+    let request: GenerateRequest = match serde_urlencoded::from_str(&query) {
+        Ok(req) => req,
+        Err(_) => return text_response(StatusCode::BAD_REQUEST, "invalid query string".into()),
+    };
+
+    generate_response(request.count, job_sender, max_batch_size).await
+}
+
+/// validates the requested count and hands the job to the generator thread
+async fn generate_response(
+    requested_count: Option<i64>,
+    job_sender: mpsc::Sender<GenerateJob>,
+    max_batch_size: usize,
+) -> Response {
+    let count = requested_count.unwrap_or(1);
 
     if count <= 0 {
         return text_response(
@@ -680,8 +721,9 @@ mod tests {
 
         let routes = create_routes();
 
+        // generate accepts get and post only
         let resp = request()
-            .method("GET")
+            .method("PUT")
             .path("/generate")
             .reply(&routes)
             .await;
@@ -882,5 +924,122 @@ mod tests {
             "1",
             "429 responses must tell clients when to retry"
         );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_generate_without_query_returns_one_id() {
+        clear_env();
+        let routes = create_routes();
+
+        let resp = request()
+            .method("GET")
+            .path("/generate")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+        let ids: Vec<i64> = serde_json::from_slice(resp.body()).unwrap();
+        assert_eq!(ids.len(), 1);
+        assert!(ids[0] > 0);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_generate_with_count_query() {
+        clear_env();
+        let routes = create_routes();
+
+        let resp = request()
+            .method("GET")
+            .path("/generate?count=10")
+            .reply(&routes)
+            .await;
+
+        assert_eq!(resp.status(), 200);
+        let ids: Vec<i64> = serde_json::from_slice(resp.body()).unwrap();
+        assert_eq!(ids.len(), 10);
+        let unique: HashSet<i64> = ids.iter().cloned().collect();
+        assert_eq!(unique.len(), 10, "all ids should be unique");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_generate_rejects_non_positive_count() {
+        clear_env();
+        let routes = create_routes();
+
+        for query in ["count=0", "count=-5"] {
+            let resp = request()
+                .method("GET")
+                .path(&format!("/generate?{query}"))
+                .reply(&routes)
+                .await;
+            assert_eq!(resp.status(), 400, "{query} should be rejected");
+            let body = std::str::from_utf8(resp.body()).unwrap();
+            assert!(body.contains("invalid count"), "unexpected body: {body}");
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_generate_rejects_malformed_query() {
+        clear_env();
+        let routes = create_routes();
+
+        // a non-numeric count and an unknown field both fail query parsing
+        for query in ["count=abc", "count=", "foo=1", "count=1&foo=1"] {
+            let resp = request()
+                .method("GET")
+                .path(&format!("/generate?{query}"))
+                .reply(&routes)
+                .await;
+            assert_eq!(resp.status(), 400, "{query} should be rejected");
+            let body = std::str::from_utf8(resp.body()).unwrap();
+            assert!(body.contains("invalid query"), "unexpected body: {body}");
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_generate_rejects_count_above_max() {
+        clear_env();
+        let routes = create_routes();
+
+        let resp = request()
+            .method("GET")
+            .path(&format!("/generate?count={}", DEFAULT_MAX_BATCH_SIZE + 1))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(resp.status(), 400);
+        let body = std::str::from_utf8(resp.body()).unwrap();
+        assert!(
+            body.contains(&format!("must not exceed {DEFAULT_MAX_BATCH_SIZE}")),
+            "unexpected body: {body}"
+        );
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_generate_ignores_request_body() {
+        clear_env();
+        let routes = create_routes();
+
+        // the query decides the count on GET; a json body is not consulted
+        let resp = request()
+            .method("GET")
+            .path("/generate?count=2")
+            .json(&json!({"count": 50}))
+            .reply(&routes)
+            .await;
+
+        assert_eq!(resp.status(), 200);
+        let ids: Vec<i64> = serde_json::from_slice(resp.body()).unwrap();
+        assert_eq!(ids.len(), 2);
     }
 }
