@@ -103,8 +103,9 @@ pub async fn exit_signal() {
     }
 }
 
+/// builds the routes from environment variables; used by tests and benches
 pub fn create_routes() -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
-    create_routes_from_args(parse_args())
+    create_routes_from_args(parse_env_args())
 }
 
 fn create_routes_from_args(
@@ -243,16 +244,13 @@ fn saturated_response() -> Response {
 
 #[cfg(test)]
 fn snowflake_generator_from_env() -> SnowflakeGenerator<SystemClock> {
-    snowflake_generator(parse_args())
+    snowflake_generator(parse_env_args())
 }
 
-fn parse_args() -> Args {
-    if cfg!(test) {
-        // test harness flags are not worker arguments
-        Args::try_parse_from([""]).unwrap()
-    } else {
-        Args::parse()
-    }
+/// reads worker settings from the environment only, because test and bench
+/// harnesses own the process argv
+fn parse_env_args() -> Args {
+    Args::try_parse_from([""]).expect("environment variables hold valid worker settings")
 }
 
 fn snowflake_generator(args: Args) -> SnowflakeGenerator<SystemClock> {

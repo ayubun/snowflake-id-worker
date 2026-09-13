@@ -28,7 +28,9 @@ tokio = { version = "1", features = ["full"] }
 warp = "0.3.7"
 
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+# pins the bench process to one cpu on linux
+libc = "0.2"
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
 serial_test = "=3.5.0"
 tokio-test = "0.4"
