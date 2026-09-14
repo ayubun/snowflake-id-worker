@@ -1457,11 +1457,13 @@ version = "0.4.0"
 dependencies = [
  "clap",
  "criterion",
+ "futures-util",
  "hostname",
  "libc",
  "reqwest",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "serial_test",
  "tokio",
  "tokio-test",
