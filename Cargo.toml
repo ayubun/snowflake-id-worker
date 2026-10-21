@@ -33,7 +33,7 @@ warp = "0.3.7"
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 # pins the bench process to one cpu on linux
 libc = "0.2"
-reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 serial_test = "=3.5.0"
 tokio-test = "0.4"
 
